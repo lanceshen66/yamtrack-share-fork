@@ -1,0 +1,40 @@
+services:
+  yamtrack:
+    container_name: yamtrack
+    image: ghcr.io/fuzzygrim/yamtrack
+    restart: unless-stopped
+    depends_on:
+      - db
+      - redis
+    environment:
+      - TZ=Europe/Berlin
+      - SECRET=longstring
+      - REDIS_URL=redis://redis:6379
+      - DB_HOST=db
+      - DB_NAME=yamtrack
+      - DB_USER=yamtrack
+      - DB_PASSWORD=yamtrack
+      - DB_PORT=5432
+    ports:
+      - "8000:8000"
+
+  db:
+    image: postgres:16-alpine
+    container_name: yamtrack-db
+    environment:
+      - POSTGRES_DB=yamtrack
+      - POSTGRES_USER=yamtrack
+      - POSTGRES_PASSWORD=yamtrack
+    volumes:
+      - ./db:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  redis:
+    container_name: yamtrack-redis
+    image: redis:8-alpine
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+
+volumes:
+  redis_data:

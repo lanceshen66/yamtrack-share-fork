@@ -1,0 +1,1268 @@
+import logging
+from pathlib import Path
+from urllib.parse import urlencode
+
+from django.apps import apps
+from django.conf import settings
+from django.contrib import messages
+from django.contrib.auth.decorators import login_not_required
+from django.core.cache import cache
+from django.core.paginator import Paginator
+from django.db import IntegrityError
+from django.db.models import Prefetch, prefetch_related_objects
+from django.http import (
+    FileResponse,
+    Http404,
+    HttpResponse,
+    HttpResponseBadRequest,
+    JsonResponse,
+)
+from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
+from django.utils import timezone
+from django.views.decorators.http import require_GET, require_http_methods, require_POST
+
+from app import config, helpers, history_processor, share
+from app import home as home_helpers
+from app import statistics as stats
+from app.forms import EpisodeForm, ManualItemForm, get_form_class
+from app.models import (
+    TV,
+    BasicMedia,
+    Episode,
+    Item,
+    MediaTypes,
+    Season,
+    Sources,
+    Status,
+    UserMessage,
+)
+from app.providers import manual, services, tmdb
+from app.templatetags import app_tags
+from events.models import Event
+from users.models import (
+    DateFormatChoices,
+    HomeSortChoices,
+    MediaSortChoices,
+    MediaStatusChoices,
+    User,
+)
+
+logger = logging.getLogger(__name__)
+
+
+@require_GET
+def home(request):
+    """Home page with media items in progress and planning."""
+    sort_by = request.user.update_preference("home_sort", request.GET.get("sort"))
+    media_type_to_load = request.GET.get("load_media_type")
+    section_to_load = request.GET.get("load_status", Status.IN_PROGRESS.value)
+    hide_unreleased_param = request.GET.get("hide_unreleased")
+    hide_unreleased = request.user.update_preference(
+        "home_hide_unreleased",
+        None if hide_unreleased_param is None else hide_unreleased_param == "true",
+    )
+    items_limit = 14
+
+    # If this is an HTMX request to load more items for a specific media type
+    if request.headers.get("HX-Request") and media_type_to_load:
+        list_by_type = home_helpers.get_home_media_types(
+            request,
+            sort_by,
+            section_to_load,
+            items_limit,
+            media_type_to_load,
+            hide_unreleased=hide_unreleased,
+        )
+        return render(
+            request,
+            "app/components/home_grid.html",
+            {
+                "media_list": list_by_type.get(
+                    media_type_to_load,
+                    {"items": [], "total": 0},
+                ),
+                "home_status": section_to_load,
+            },
+        )
+
+    home_sections = [
+        home_helpers.build_home_section(
+            section_key,
+            home_helpers.get_home_media_types(
+                request,
+                sort_by,
+                section_key,
+                items_limit,
+                hide_unreleased=hide_unreleased,
+            ),
+        )
+        for section_key in (Status.IN_PROGRESS.value, Status.PLANNING.value)
+    ]
+
+    context = {
+        "home_sections": home_sections,
+        "current_sort": sort_by,
+        "sort_choices": HomeSortChoices.choices,
+        "hide_unreleased": hide_unreleased,
+        "items_limit": items_limit,
+    }
+    return render(request, "app/home.html", context)
+
+
+@require_POST
+def progress_edit(request, media_type, instance_id):
+    """Increase or decrease the progress of a media item from home page."""
+    operation = request.POST["operation"]
+    hide_unreleased = request.user.home_hide_unreleased
+    home_status = request.POST.get("home_status")
+
+    media = helpers.get_owned_media_or_404(
+        request, media_type, instance_id, prefetch=True
+    )
+
+    if operation == "increase":
+        media.increase_progress()
+    elif operation == "decrease":
+        media.decrease_progress()
+
+    if media_type == MediaTypes.SEASON.value:
+        # clear prefetch cache to get the updated episodes
+        media.refresh_from_db()
+        prefetch_related_objects(
+            [media],
+            Prefetch(
+                "episodes",
+                queryset=Episode.objects.select_related("item"),
+            ),
+            Prefetch(
+                "item__event_set",
+                queryset=Event.objects.all(),
+                to_attr="prefetched_events",
+            ),
+        )
+
+    if hide_unreleased and home_status == Status.IN_PROGRESS.value:
+        if media_type == MediaTypes.SEASON.value:
+            BasicMedia.objects.annotate_max_progress([media], media_type)
+        BasicMedia.objects._annotate_next_event([media])
+
+        if not home_helpers.is_active_in_progress_media(media):
+            response = HttpResponse()
+            response["HX-Retarget"] = f"#home-media-{media.item.media_type}-{media.id}"
+            response["HX-Reswap"] = "delete"
+            return response
+
+    context = {
+        "media": media,
+        "home_status": home_status,
+    }
+    return render(
+        request,
+        "app/components/progress_changer.html",
+        context,
+    )
+
+
+@login_not_required
+@require_GET
+def media_list(request, username, media_type):
+    """Return the media list page."""
+    target_user = get_object_or_404(User, username=username)
+
+    # if user is looking at own page then update preferences
+    if request.user == target_user:
+        layout = target_user.update_preference(
+            f"{media_type}_layout",
+            request.GET.get("layout"),
+        )
+        sort_filter = target_user.update_preference(
+            f"{media_type}_sort",
+            request.GET.get("sort"),
+        )
+        status_filter = target_user.update_preference(
+            f"{media_type}_status",
+            request.GET.get("status"),
+        )
+    else:
+        # privacy check then media type check
+        if target_user.profile_private:
+            msg = "User not found"
+            raise Http404(msg)
+
+        enabled_media_types = target_user.get_enabled_media_types()
+        if not enabled_media_types:
+            msg = "User doesn't have any media types enabled"
+            raise Http404(msg)
+
+        if media_type not in enabled_media_types:
+            return redirect(
+                "medialist",
+                username=target_user.username,
+                media_type=enabled_media_types[0],
+            )
+
+        layout = target_user.get_valid_preference(
+            f"{media_type}_layout",
+            request.GET.get("layout"),
+        )
+        sort_filter = target_user.get_valid_preference(
+            f"{media_type}_sort",
+            request.GET.get("sort"),
+        )
+        status_filter = target_user.get_valid_preference(
+            f"{media_type}_status",
+            request.GET.get("status"),
+        )
+
+    search_query = request.GET.get("search", "")
+    page = request.GET.get("page", 1)
+
+    # Prepare status filter for database query
+    if not status_filter:
+        status_filter = MediaStatusChoices.ALL
+
+    # Get media list with filters applied
+    media_queryset = BasicMedia.objects.get_media_list(
+        user=target_user,
+        media_type=media_type,
+        status_filter=status_filter,
+        sort_filter=sort_filter,
+        search=search_query,
+    )
+
+    # Paginate results
+    items_per_page = 32
+    paginator = Paginator(media_queryset, items_per_page)
+    media_page = paginator.get_page(page)
+
+    BasicMedia.objects.annotate_max_progress(
+        media_page.object_list,
+        media_type,
+    )
+
+    context = {
+        "media_type": media_type,
+        "media_type_plural": app_tags.media_type_readable_plural(media_type).lower(),
+        "media_list": media_page,
+        "current_layout": layout,
+        "layout_class": ".media-grid" if layout == "grid" else "tbody",
+        "current_sort": sort_filter,
+        "current_status": status_filter,
+        "sort_choices": MediaSortChoices.choices,
+        "status_choices": MediaStatusChoices.choices,
+        "target_user": target_user,
+    }
+
+    # Handle HTMX requests for partial updates. Soft-navigation requests (e.g.
+    # after saving from an edit modal) need the full page for the body swap.
+    if request.headers.get("HX-Request") and not request.headers.get(
+        "X-Soft-Navigation"
+    ):
+        # Filtering from empty list
+        if request.headers.get("HX-Target") == "empty_list":
+            # If still empty, keep user in the same page
+            if not media_page.object_list:
+                return HttpResponse(status=204)
+            response = HttpResponse()
+            response["HX-Redirect"] = reverse(
+                "medialist", args=[target_user.username, media_type]
+            )
+            return response
+        if layout == "grid":
+            template_name = "app/components/media_grid_items.html"
+        else:
+            template_name = "app/components/media_table_items.html"
+    else:
+        template_name = "app/media_list.html"
+
+    return render(request, template_name, context)
+
+
+@require_GET
+def media_search(request):
+    """Return the media search page."""
+    media_type = request.user.update_preference(
+        "last_search_type",
+        request.GET["media_type"],
+    )
+    query = request.GET["q"]
+    page = int(request.GET.get("page", 1))
+    layout = request.GET.get("layout", "grid")
+
+    # only receives source when searching with secondary source
+    source = request.GET.get(
+        "source",
+        config.get_default_source_name(media_type).value,
+    )
+
+    data = services.search(media_type, query, page, source)
+
+    # Enrich search results with user tracking data
+    if data.get("results"):
+        data["results"] = helpers.enrich_items_with_user_data(
+            request, data["results"], "search"
+        )
+
+    context = {
+        "data": data,
+        "source": source,
+        "media_type": media_type,
+        "layout": layout,
+    }
+
+    return render(request, "app/search.html", context)
+
+
+@require_GET
+def media_details(request, source, media_type, media_id, title):  # noqa: ARG001 title for URL
+    """Return the details page for a media item."""
+    media_metadata = services.get_media_metadata(media_type, media_id, source)
+    user_medias = BasicMedia.objects.filter_media_prefetch(
+        request.user,
+        media_id,
+        media_type,
+        source,
+    )
+    current_instance = user_medias[0] if user_medias else None
+
+    if current_instance is not None:
+        helpers.refresh_item_image_if_missing(
+            current_instance.item, media_metadata.get("image")
+        )
+
+    # Enrich related items with user tracking data
+    if media_metadata.get("related"):
+        for section_name, related_items in media_metadata["related"].items():
+            if related_items:
+                media_metadata["related"][section_name] = (
+                    helpers.enrich_items_with_user_data(
+                        request, related_items, section_name
+                    )
+                )
+
+    if media_type in ["tv", "movie"]:
+        watch_providers = tmdb.filter_providers(
+            media_metadata.get("providers"), request.user.watch_provider_region
+        )
+    else:
+        watch_providers = None
+
+    context = {
+        "media": media_metadata,
+        "media_type": media_type,
+        "user_medias": user_medias,
+        "current_instance": current_instance,
+        "watch_providers": watch_providers,
+        "watch_provider_region": request.user.watch_provider_region,
+    }
+    return render(request, "app/media_details.html", context)
+
+
+@require_GET
+def season_details(request, source, media_id, title, season_number):  # noqa: ARG001 For URL
+    """Return the details page for a season."""
+    tv_with_seasons_metadata = services.get_media_metadata(
+        "tv_with_seasons",
+        media_id,
+        source,
+        [season_number],
+    )
+    season_metadata = tv_with_seasons_metadata[f"season/{season_number}"]
+
+    user_medias = BasicMedia.objects.filter_media_prefetch(
+        request.user,
+        media_id,
+        MediaTypes.SEASON.value,
+        source,
+        season_number=season_number,
+    )
+
+    current_instance = user_medias[0] if user_medias else None
+    episodes_in_db = current_instance.episodes.all() if current_instance else []
+
+    if current_instance is not None:
+        helpers.refresh_item_image_if_missing(
+            current_instance.item, season_metadata.get("image")
+        )
+
+    if source == Sources.MANUAL.value:
+        season_metadata["episodes"] = manual.process_episodes(
+            season_metadata,
+            episodes_in_db,
+        )
+    else:
+        season_metadata["episodes"] = tmdb.process_episodes(
+            season_metadata,
+            episodes_in_db,
+        )
+
+    # Enrich related items with user tracking data
+    if season_metadata.get("related"):
+        for section_name, related_items in season_metadata["related"].items():
+            if related_items:
+                season_metadata["related"][section_name] = (
+                    helpers.enrich_items_with_user_data(
+                        request,
+                        related_items,
+                        section_name,
+                    )
+                )
+
+    context = {
+        "media": season_metadata,
+        "tv": tv_with_seasons_metadata,
+        "media_type": MediaTypes.SEASON.value,
+        "user_medias": user_medias,
+        "current_instance": current_instance,
+        "watch_providers": tmdb.filter_providers(
+            season_metadata.get("providers"), request.user.watch_provider_region
+        ),
+        "watch_provider_region": request.user.watch_provider_region,
+    }
+    return render(request, "app/media_details.html", context)
+
+
+@require_POST
+def update_media_score(request, media_type, instance_id):
+    """Update the user's score for a media item."""
+    media = helpers.get_owned_media_or_404(request, media_type, instance_id)
+
+    score = float(request.POST.get("score"))
+    media.score = score
+    media.save()
+    logger.info(
+        "%s score updated to %s",
+        media,
+        score,
+    )
+
+    return JsonResponse(
+        {
+            "success": True,
+            "score": score,
+        },
+    )
+
+
+@require_POST
+def sync_metadata(request, source, media_type, media_id, season_number=None):
+    """Refresh the metadata for a media item."""
+    if source == Sources.MANUAL.value:
+        msg = "Manual items cannot be synced."
+        messages.error(request, msg)
+        return HttpResponse(
+            msg,
+            status=400,
+            headers={"HX-Redirect": request.POST.get("next", "/")},
+        )
+
+    cache_key = f"{source}_{media_type}_{media_id}"
+    if media_type == MediaTypes.SEASON.value:
+        cache_key += f"_{season_number}"
+
+    ttl = cache.ttl(cache_key)
+    logger.debug("%s - Cache TTL for: %s", cache_key, ttl)
+
+    if ttl is not None and ttl > (settings.CACHE_TIMEOUT - 3):
+        msg = "The data was recently synced, please wait a few seconds."
+        messages.error(request, msg)
+        logger.error(msg)
+    else:
+        deleted = cache.delete(cache_key)
+        logger.debug("%s - Old cache deleted: %s", cache_key, deleted)
+
+        metadata = services.get_media_metadata(
+            media_type,
+            media_id,
+            source,
+            [season_number],
+        )
+        item, _ = Item.objects.update_or_create(
+            media_id=media_id,
+            source=source,
+            media_type=media_type,
+            season_number=season_number,
+            defaults={
+                "title": metadata["title"],
+                "image": metadata["image"],
+            },
+        )
+        title = metadata["title"]
+        if season_number:
+            title += f" - Season {season_number}"
+
+        if media_type == MediaTypes.SEASON.value:
+            metadata["episodes"] = tmdb.process_episodes(
+                metadata,
+                [],
+            )
+
+            # Create a dictionary of existing episodes keyed by episode number
+            existing_episodes = {
+                ep.episode_number: ep
+                for ep in Item.objects.filter(
+                    source=source,
+                    media_type=MediaTypes.EPISODE.value,
+                    media_id=media_id,
+                    season_number=season_number,
+                )
+            }
+
+            episodes_to_update = []
+            episode_count = 0
+
+            for episode_data in metadata["episodes"]:
+                episode_number = episode_data["episode_number"]
+                if episode_number in existing_episodes:
+                    episode_item = existing_episodes[episode_number]
+                    episode_item.title = metadata["title"]
+                    episode_item.image = episode_data["image"]
+                    episodes_to_update.append(episode_item)
+                    episode_count += 1
+
+            logger.info(
+                "Found %s existing episodes to update for %s",
+                episode_count,
+                title,
+            )
+
+            if episodes_to_update:
+                updated_count = Item.objects.bulk_update(
+                    episodes_to_update,
+                    ["title", "image"],
+                    batch_size=100,
+                )
+                logger.info(
+                    "Successfully updated %s episodes for %s",
+                    updated_count,
+                    title,
+                )
+
+        item.fetch_releases(delay=False)
+
+        msg = f"{title} was synced to {Sources(source).label} successfully."
+        messages.success(request, msg)
+
+    if request.headers.get("HX-Request"):
+        return HttpResponse(
+            status=204,
+            headers={
+                "HX-Redirect": request.POST["next"],
+            },
+        )
+    return helpers.redirect_back(request)
+
+
+@require_GET
+def track_modal(
+    request,
+    source,
+    media_type,
+    media_id,
+    season_number=None,
+):
+    """Return the tracking form for a media item."""
+    instance_id = request.GET.get("instance_id")
+    if instance_id:
+        media = BasicMedia.objects.get_media(
+            request.user,
+            media_type,
+            instance_id,
+        )
+    elif request.GET.get("is_create"):
+        media = None
+    else:
+        # no specific instance, try to find the first one
+        user_medias = BasicMedia.objects.filter_media(
+            request.user,
+            media_id,
+            media_type,
+            source,
+            season_number=season_number,
+        )
+        media = user_medias.first()
+        if media:
+            instance_id = media.id
+
+    initial_data = {
+        "media_id": media_id,
+        "source": source,
+        "media_type": media_type,
+        "season_number": season_number,
+        "instance_id": instance_id,
+    }
+
+    if media:
+        title = media.item
+        if media_type == MediaTypes.GAME.value:
+            initial_data["progress"] = helpers.minutes_to_hhmm(media.progress)
+    else:
+        title = services.get_media_metadata(
+            media_type,
+            media_id,
+            source,
+            [season_number],
+        )["title"]
+        if media_type == MediaTypes.SEASON.value:
+            title += f" S{season_number}"
+
+    form = get_form_class(media_type)(instance=media, initial=initial_data)
+
+    return render(
+        request,
+        "app/components/fill_track.html",
+        {
+            "title": title,
+            "form": form,
+            "media": media,
+            "return_url": request.GET["return_url"],
+        },
+    )
+
+
+@require_POST
+def media_save(request):
+    """Save or update media data to the database."""
+    media_id = request.POST["media_id"]
+    source = request.POST["source"]
+    media_type = request.POST["media_type"]
+    season_number = request.POST.get("season_number")
+    instance_id = request.POST.get("instance_id")
+
+    if instance_id:
+        instance = helpers.get_owned_media_or_404(request, media_type, instance_id)
+    else:
+        metadata = services.get_media_metadata(
+            media_type,
+            media_id,
+            source,
+            [season_number],
+        )
+        item, _ = Item.objects.get_or_create(
+            media_id=media_id,
+            source=source,
+            media_type=media_type,
+            season_number=season_number,
+            defaults={
+                "title": metadata["title"],
+                "image": metadata["image"],
+            },
+        )
+        model = apps.get_model(app_label="app", model_name=media_type)
+        instance = model(item=item, user=request.user)
+
+    # Validate the form and save the instance if it's valid
+    form_class = get_form_class(media_type)
+    form = form_class(request.POST, instance=instance)
+    if form.is_valid():
+        form.save()
+        logger.info("%s saved successfully.", form.instance)
+    else:
+        logger.error(form.errors.as_json())
+        for field, errors in form.errors.items():
+            for error in errors:
+                messages.error(
+                    request,
+                    f"{field.replace('_', ' ').title()}: {error}",
+                )
+
+    return helpers.redirect_back(request)
+
+
+@require_POST
+def media_delete(request):
+    """Delete media data from the database."""
+    instance_id = request.POST["instance_id"]
+    media_type = request.POST["media_type"]
+    media = helpers.get_owned_media_or_404(request, media_type, instance_id)
+    media.delete()
+    logger.info("%s deleted successfully.", media)
+
+    return helpers.redirect_back(request)
+
+
+@require_POST
+def mark_user_messages_shown(request):
+    """Mark all unseen persistent messages for the user as shown."""
+    message_ids = [
+        int(message_id)
+        for message_id in request.POST.getlist("message_ids")
+        if message_id.isdigit()
+    ]
+    if not message_ids:
+        return HttpResponse(status=204)
+
+    UserMessage.objects.filter(
+        id__in=message_ids,
+        user=request.user,
+        shown_at__isnull=True,
+    ).update(shown_at=timezone.now())
+    return HttpResponse(status=204)
+
+
+@require_POST
+def episode_save(request):
+    """Handle the creation, deletion, and updating of episodes for a season."""
+    media_id = request.POST["media_id"]
+    season_number = int(request.POST["season_number"])
+    episode_number = int(request.POST["episode_number"])
+    source = request.POST["source"]
+
+    form = EpisodeForm(request.POST)
+    if not form.is_valid():
+        logger.error("Form validation failed: %s", form.errors)
+        return HttpResponseBadRequest("Invalid form data")
+
+    try:
+        related_season = Season.objects.get(
+            item__media_id=media_id,
+            item__source=source,
+            item__season_number=season_number,
+            item__episode_number=None,
+            user=request.user,
+        )
+    except Season.DoesNotExist:
+        tv_with_seasons_metadata = services.get_media_metadata(
+            "tv_with_seasons",
+            media_id,
+            source,
+            [season_number],
+        )
+        season_metadata = tv_with_seasons_metadata[f"season/{season_number}"]
+
+        item, _ = Item.objects.get_or_create(
+            media_id=media_id,
+            source=Sources.TMDB.value,
+            media_type=MediaTypes.SEASON.value,
+            season_number=season_number,
+            defaults={
+                "title": tv_with_seasons_metadata["title"],
+                "image": season_metadata["image"],
+            },
+        )
+        related_season = Season.objects.create(
+            item=item,
+            user=request.user,
+            score=None,
+            status=Status.IN_PROGRESS.value,
+            notes="",
+        )
+
+        logger.info("%s did not exist, it was created successfully.", related_season)
+
+    related_season.watch(episode_number, form.cleaned_data["end_date"])
+
+    return helpers.redirect_back(request)
+
+
+@require_http_methods(["GET", "POST"])
+def create_entry(request):
+    """Return the form for manually adding media items."""
+    if request.method == "GET":
+        media_types = MediaTypes.values
+        return render(request, "app/create_entry.html", {"media_types": media_types})
+
+    # Process the form submission
+    form = ManualItemForm(request.POST, user=request.user)
+    if not form.is_valid():
+        # Handle form validation errors
+        logger.error(form.errors.as_json())
+        helpers.form_error_messages(form, request)
+        return redirect("create_entry")
+
+    # Try to save the item
+    try:
+        item = form.save()
+    except IntegrityError:
+        # Handle duplicate item
+        media_name = form.cleaned_data["title"]
+        if form.cleaned_data.get("season_number"):
+            media_name += f" - Season {form.cleaned_data['season_number']}"
+        if form.cleaned_data.get("episode_number"):
+            media_name += f" - Episode {form.cleaned_data['episode_number']}"
+
+        logger.exception("%s already exists in the database.", media_name)
+        messages.error(request, f"{media_name} already exists in the database.")
+        return redirect("create_entry")
+
+    # Prepare and validate the media form
+    updated_request = request.POST.copy()
+    updated_request.update({"source": item.source, "media_id": item.media_id})
+    media_form = get_form_class(item.media_type)(updated_request)
+
+    if not media_form.is_valid():
+        # Handle media form validation errors
+        logger.error(media_form.errors.as_json())
+        helpers.form_error_messages(media_form, request)
+
+        # Delete the item since the media creation failed
+        item.delete()
+        logger.info("%s was deleted due to media form validation failure", item)
+        return redirect("create_entry")
+
+    # Save the media instance
+    media_form.instance.user = request.user
+    media_form.instance.item = item
+
+    # Handle relationships based on media type
+    if item.media_type == MediaTypes.SEASON.value:
+        media_form.instance.related_tv = form.cleaned_data["parent_tv"]
+    elif item.media_type == MediaTypes.EPISODE.value:
+        media_form.instance.related_season = form.cleaned_data["parent_season"]
+
+    media_form.save()
+
+    # Success message
+    msg = f"{item} added successfully."
+    messages.success(request, msg)
+    logger.info(msg)
+
+    return redirect("create_entry")
+
+
+@require_GET
+def search_parent_tv(request):
+    """Return the search results for parent TV shows."""
+    query = request.GET.get("q", "").strip()
+
+    if len(query) <= 1:
+        return render(request, "app/components/search_parent_tv.html")
+
+    logger.debug(
+        "%s - Searching for TV shows with query: %s",
+        request.user.username,
+        query,
+    )
+
+    parent_tvs = TV.objects.filter(
+        user=request.user,
+        item__source=Sources.MANUAL.value,
+        item__media_type=MediaTypes.TV.value,
+        item__title__icontains=query,
+    )[:5]
+
+    return render(
+        request,
+        "app/components/search_parent_tv.html",
+        {"results": parent_tvs, "query": query},
+    )
+
+
+@require_GET
+def search_parent_season(request):
+    """Return the search results for parent seasons."""
+    query = request.GET.get("q", "").strip()
+
+    if len(query) <= 1:
+        return render(request, "app/components/search_parent_tv.html")
+
+    logger.debug(
+        "%s - Searching for seasons with query: %s",
+        request.user.username,
+        query,
+    )
+
+    parent_seasons = Season.objects.filter(
+        user=request.user,
+        item__source=Sources.MANUAL.value,
+        item__media_type=MediaTypes.SEASON.value,
+        item__title__icontains=query,
+    )[:5]
+
+    return render(
+        request,
+        "app/components/search_parent_season.html",
+        {"results": parent_seasons, "query": query},
+    )
+
+
+@require_GET
+def history_modal(
+    request,
+    source,
+    media_type,
+    media_id,
+    season_number=None,
+    episode_number=None,
+):
+    """Return the history page for a media item."""
+    user_medias = BasicMedia.objects.filter_media(
+        request.user,
+        media_id,
+        media_type,
+        source,
+        season_number=season_number,
+        episode_number=episode_number,
+    )
+
+    total_medias = user_medias.count()
+    timeline_entries = []
+    for index, media in enumerate(user_medias, start=1):
+        if history := media.history.all():
+            media_entry_number = total_medias - index + 1
+            timeline_entries.extend(
+                history_processor.process_history_entries(
+                    history,
+                    media_type,
+                    media_entry_number,
+                    request.user,
+                ),
+            )
+    return render(
+        request,
+        "app/components/fill_history.html",
+        {
+            "media_type": media_type,
+            "timeline": timeline_entries,
+            "total_medias": total_medias,
+            "return_url": request.GET["return_url"],
+        },
+    )
+
+
+@require_http_methods(["DELETE"])
+def delete_history_record(request, media_type, history_id):
+    """Delete a specific history record."""
+    try:
+        historical_model = apps.get_model(
+            app_label="app",
+            model_name=f"historical{media_type.lower()}",
+        )
+
+        historical_model.objects.get(
+            history_id=history_id,
+            history_user=request.user,
+        ).delete()
+
+        logger.info(
+            "Deleted history record %s",
+            str(history_id),
+        )
+
+        # Return empty 200 response - the element will be removed by HTMX
+        return HttpResponse()
+
+    except historical_model.DoesNotExist:
+        logger.exception(
+            "History record %s not found for user %s",
+            str(history_id),
+            str(request.user),
+        )
+        return HttpResponse("Record not found", status=404)
+
+
+@require_GET
+def statistics(request):
+    """Return the statistics page."""
+    start_date, end_date = stats.parse_activity_date_range(request)
+
+    # Get all user media data in a single operation
+    user_media, media_count = stats.get_user_media(
+        request.user,
+        start_date,
+        end_date,
+    )
+
+    # Calculate all statistics from the retrieved data
+    media_type_distribution = stats.get_media_type_distribution(
+        media_count,
+    )
+    score_distribution, top_rated = stats.get_score_distribution(user_media)
+    status_distribution = stats.get_status_distribution(user_media)
+    status_pie_chart_data = stats.get_status_pie_chart_data(
+        status_distribution,
+    )
+    consumption_stats = stats.get_consumption_stats(user_media, media_count)
+
+    total = media_count["total"]
+    in_progress_count = stats.get_status_total(
+        status_distribution,
+        Status.IN_PROGRESS.value,
+    )
+    rated_percent = (
+        round(score_distribution["total_scored"] / total * 100) if total else None
+    )
+
+    context = {
+        "start_date": start_date,
+        "end_date": end_date,
+        "media_count": media_count,
+        "media_type_distribution": media_type_distribution,
+        "score_distribution": score_distribution,
+        "top_rated": top_rated,
+        "status_distribution": status_distribution,
+        "status_pie_chart_data": status_pie_chart_data,
+        "consumption_stats": consumption_stats,
+        "in_progress_count": in_progress_count,
+        "rated_percent": rated_percent,
+        "date_format_values": DateFormatChoices.values,
+    }
+
+    return render(request, "app/statistics.html", context)
+
+
+@require_GET
+def journal(request):
+    """Return the journal page: a global feed of the user's tracking activity."""
+    start_date, end_date = stats.parse_activity_date_range(request)
+
+    items_per_page = 20
+    # Keyset pagination: the cursor points just past the previous page's last
+    # row, so each request reads at most one page per media type regardless of
+    # scroll depth (never re-scanning everything above the current page).
+    cursor = history_processor.parse_journal_cursor(request)
+    page_rows, has_next = history_processor.get_journal_page(
+        request.user,
+        start_date,
+        end_date,
+        limit=items_per_page,
+        cursor=cursor,
+    )
+    entries = history_processor.build_journal_entries(page_rows, request.user)
+    journal_days = history_processor.build_journal_days(entries, request.user)
+
+    # Preserve the active date range when the feed paginates via HTMX.
+    date_params = {
+        key: request.GET[key]
+        for key in ("start-date", "end-date")
+        if key in request.GET
+    }
+
+    # Cursor for the next page: the last row rendered on this one.
+    next_params = dict(date_params)
+    if page_rows:
+        last_date, last_type, last_id = page_rows[-1]
+        next_params["cursor_date"] = last_date.isoformat()
+        next_params["cursor_type"] = last_type
+        next_params["cursor_id"] = last_id
+
+    prev_day = request.GET.get("last_day", "")
+
+    context = {
+        "entries": entries,
+        "journal_days": journal_days,
+        # The previous page's last day, so a day split across pages isn't
+        # relabelled; the last day on this page, forwarded to the next page.
+        # Falls back to prev_day when this page rendered no days, so a day that
+        # spans an all-filtered page isn't shown twice.
+        "prev_day": prev_day,
+        "last_day": journal_days[-1]["day_iso"] if journal_days else prev_day,
+        "has_next": has_next,
+        "next_query": urlencode(next_params),
+        "filter_query": urlencode(date_params),
+        "start_date": start_date,
+        "end_date": end_date,
+    }
+
+    # The activity dashboard only appears on the full page, so skip its queries
+    # on the HTMX partial requests that load additional feed pages. Soft
+    # navigations (body swaps) still need the full page.
+    if request.headers.get("HX-Request") and not request.headers.get(
+        "X-Soft-Navigation"
+    ):
+        return render(request, "app/components/journal_items.html", context)
+
+    context.update(
+        {
+            "activity_data": stats.get_activity_data(
+                request.user,
+                start_date,
+                end_date,
+            ),
+            "activity_total": history_processor.get_journal_count(
+                request.user,
+                start_date,
+                end_date,
+            ),
+            "date_format_values": DateFormatChoices.values,
+        },
+    )
+    return render(request, "app/journal.html", context)
+
+
+@require_GET
+def service_worker():
+    """Serve the service worker file."""
+    sw_path = Path(settings.STATICFILES_DIRS[0]) / "js" / "serviceworker.js"
+    with sw_path.open() as f:
+        response = HttpResponse(f.read(), content_type="application/javascript")
+        response["Service-Worker-Allowed"] = "/"
+        return response
+
+
+# --------------------------------------------------------------------------- #
+# 分享：把收藏导出成一张适合手机分享的图片
+# --------------------------------------------------------------------------- #
+SHARE_SCOPE_CHOICES = [
+    (Status.COMPLETED.value, "Finished"),
+    (Status.IN_PROGRESS.value, "Watching"),
+    (Status.PLANNING.value, "Planned"),
+    (MediaStatusChoices.ALL.value, "Everything"),
+]
+
+
+def _share_scope(request, username):
+    """分享只对本人开放，避免拿别人的列表去生成图片。"""
+    target_user = get_object_or_404(User, username=username)
+    if target_user != request.user:
+        raise Http404("You can only share your own list")
+    return target_user
+
+
+def _share_queryset(target_user, media_type, scope):
+    """按分享范围取出条目，默认按评分从高到低。"""
+    if scope not in MediaStatusChoices.values:
+        scope = Status.COMPLETED.value
+
+    return BasicMedia.objects.get_media_list(
+        user=target_user,
+        media_type=media_type,
+        status_filter=scope,
+        sort_filter=MediaSortChoices.SCORE.value,
+    )
+
+
+@require_GET
+def share_modal(request, username, media_type):
+    """Return the share dialog for a media list."""
+    target_user = _share_scope(request, username)
+    model = apps.get_model(app_label="app", model_name=media_type)
+
+    counts = {
+        Status.COMPLETED.value: model.objects.filter(
+            user=target_user,
+            status=Status.COMPLETED.value,
+        ).count(),
+        Status.IN_PROGRESS.value: model.objects.filter(
+            user=target_user,
+            status=Status.IN_PROGRESS.value,
+        ).count(),
+        Status.PLANNING.value: model.objects.filter(
+            user=target_user,
+            status=Status.PLANNING.value,
+        ).count(),
+        MediaStatusChoices.ALL.value: model.objects.filter(user=target_user).count(),
+    }
+
+    default_scope = MediaStatusChoices.ALL.value
+    for candidate in (
+        Status.COMPLETED.value,
+        Status.IN_PROGRESS.value,
+        Status.PLANNING.value,
+    ):
+        if counts[candidate]:
+            default_scope = candidate
+            break
+
+    # 列表里状态不止一种时，默认给每张海报打状态角标
+    status_kinds = (
+        model.objects.filter(user=target_user)
+        .values_list("status", flat=True)
+        .distinct()
+        .count()
+    )
+
+    context = {
+        "media_type": media_type,
+        "target_user": target_user,
+        "share_scopes": [
+            (value, label, counts[value]) for value, label in SHARE_SCOPE_CHOICES
+        ],
+        "default_scope": default_scope,
+        "default_show_status": status_kinds > 1,
+        "media_label": share.MEDIA_TYPE_LABELS.get(media_type, "collection"),
+    }
+    return render(request, "app/components/share_modal.html", context)
+
+
+@require_GET
+def share_render(request, username, media_type):
+    """Render the list into image(s) and return the preview fragment."""
+    target_user = _share_scope(request, username)
+
+    scope = request.GET.get("scope", Status.COMPLETED.value)
+    orientation = request.GET.get("orientation") or request.GET.get("mode") or "portrait"
+    theme = request.GET.get("theme", "dark")
+    show_score = request.GET.get("show_score", "1") == "1"
+    show_status = request.GET.get("show_status", "1") == "1"
+
+    orientation = share.MODE_ALIASES.get(orientation, orientation)
+    if orientation not in share.LAYOUTS:
+        orientation = "portrait"
+    if theme not in share.THEMES:
+        theme = "dark"
+
+    items = list(_share_queryset(target_user, media_type, scope))
+    if not items:
+        return render(
+            request,
+            "app/components/share_result.html",
+            {"empty": True, "media_label": share.MEDIA_TYPE_LABELS.get(media_type, "list")},
+        )
+
+    share.cleanup_share_dir()
+    share.prefetch_posters(items)
+
+    # 「全部」范围里状态是混的，自动按 看完/在追/想看/搁置/弃掉 分栏
+    group_by_status = scope == MediaStatusChoices.ALL.value
+
+    pages = share.build_share_pages(
+        items,
+        media_type=media_type,
+        status=scope,
+        orientation=orientation,
+        theme_name=theme,
+        show_score=show_score,
+        show_status=show_status and not group_by_status,
+        group_by_status=group_by_status,
+    )
+
+    label = share.MEDIA_TYPE_LABELS.get(media_type, "collection")
+    stamp = timezone.localtime(timezone.now()).strftime("%Y%m%d-%H%M")
+    shape = "横版" if orientation == "landscape" else "竖版"
+
+    images = []
+    for index, page in enumerate(pages, start=1):
+        token = share.new_token()
+        suffix = f"-{index}" if len(pages) > 1 else ""
+        filename = f"yamtrack-{label}-{shape}-{stamp}{suffix}.png"
+        path = share.save_page(page, token, filename)
+        images.append(
+            {
+                "url": reverse("share_file", args=[token]),
+                "filename": filename,
+                "width": page.width,
+                "height": page.height,
+                "size_kb": round(path.stat().st_size / 1024),
+            },
+        )
+
+    context = {
+        "images": images,
+        "count": len(items),
+        "orientation": orientation,
+        "theme": theme,
+        "media_label": label,
+    }
+    return render(request, "app/components/share_result.html", context)
+
+
+@require_GET
+def share_file(request, token):
+    """Serve a generated share image."""
+    path = share.image_path_for_token(token)
+    if path is None:
+        raise Http404("Share image not found")
+
+    if request.GET.get("dl"):
+        response = FileResponse(
+            path.open("rb"),
+            as_attachment=True,
+            filename=share.read_filename(token),
+            content_type="image/png",
+        )
+    else:
+        response = FileResponse(path.open("rb"), content_type="image/png")
+    response["Cache-Control"] = "no-store"
+    return response

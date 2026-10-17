@@ -1,0 +1,4 @@
+*.bat -text
+*.ps1 -text
+*.png binary
+*.ico binary

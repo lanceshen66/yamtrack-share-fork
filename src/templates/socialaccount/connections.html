@@ -1,0 +1,96 @@
+{% extends "socialaccount/base_manage.html" %}
+{% load allauth %}
+{% load socialaccount %}
+
+{% block head_title %}
+  Account Connections
+{% endblock head_title %}
+
+{% block content_title %}
+  Account Connections
+{% endblock content_title %}
+
+{% block content %}
+
+  {% if form.accounts %}
+    {% element p %}
+      You can sign in to your account using any of the following third-party accounts:
+    {% endelement %}
+
+    {% url 'socialaccount_connections' as action_url %}
+    {% element form form=form method="post" action=action_url %}
+      {% slot body %}
+        {% csrf_token %}
+
+        <!-- Move x-data to the parent element to share state -->
+        <div x-data="{ selectedAccount: null }">
+          <div class="space-y-3">
+            {% for acc in form.fields.account.choices %}
+              {% with account=acc.0.instance.get_provider_account %}
+                {% setvar radio_id %}
+                  id_account_{{ account.account.pk }}
+                {% endsetvar %}
+                {% setvar tags %}
+                  socialaccount,{{ account.account.provider }}
+                {% endsetvar %}
+
+                <div class="flex items-center p-4 rounded-md border cursor-pointer"
+                     :class="selectedAccount === '{{ account.account.pk }}' ? 'border-indigo-500 bg-indigo-500/10' : 'border-gray-700 bg-[#39404b]'"
+                     x-on:click="selectedAccount = '{{ account.account.pk }}'; document.getElementById('{{ radio_id }}').checked = true;">
+                  <input type="radio"
+                         id="{{ radio_id }}"
+                         name="account"
+                         value="{{ account.account.pk }}"
+                         @change="selectedAccount = '{{ account.account.pk }}'"
+                         class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300">
+
+                  <div class="ml-4 flex items-center flex-1">
+                    {% include "app/icons/key.svg" with classes="w-5 h-5 mr-3 text-purple-400" %}
+                    <div>
+                      <p class="font-medium">{{ account }}</p>
+                      <p class="text-sm text-gray-400">{{ account.get_brand.name }}</p>
+                    </div>
+                  </div>
+                </div>
+              {% endwith %}
+            {% endfor %}
+          </div>
+
+          <div class="flex justify-end mb-4 mt-4">
+            <button type="submit"
+                    :disabled="selectedAccount === null"
+                    class="flex items-center px-3 py-1.5 rounded-md text-sm transition-colors"
+                    :class="selectedAccount !== null ? 'bg-red-600 text-white hover:bg-red-700 cursor-pointer' : 'bg-red-600/50 text-white/70 cursor-not-allowed'">
+              {% include "app/icons/trashcan.svg" with classes="w-4 h-4 mr-2" %}
+              Remove Selected
+            </button>
+          </div>
+        </div>
+      {% endslot %}
+    {% endelement %}
+
+  {% else %}
+    {% element p %}
+      You currently have no third-party accounts connected to this account.
+    {% endelement %}
+  {% endif %}
+
+  {% get_providers as socialaccount_providers %}
+  {% if socialaccount_providers %}
+    <div class="relative flex items-center justify-center mt-6">
+      <div class="border-t border-gray-600 grow"></div>
+      <span class="mx-4 text-sm text-gray-400">Add a Third-Party Account</span>
+      <div class="border-t border-gray-600 grow"></div>
+    </div>
+
+    {% include "socialaccount/snippets/provider_list.html" with process="connect" %}
+    {% include "socialaccount/snippets/login_extra.html" %}
+  {% endif %}
+
+  <div class="flex mt-8">
+    <a href="{% url 'home' %}"
+       class="w-full flex items-center justify-center gap-2 px-6 py-3 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 transition-colors">
+      {% include "app/icons/house.svg" with classes="w-5 h-5" %}
+      <span>Back to Home</span></a>
+  </div>
+{% endblock content %}

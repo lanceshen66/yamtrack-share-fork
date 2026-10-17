@@ -1,0 +1,22 @@
+{
+    "id": 0,
+    "title": "Unknown Example",
+    "start_date": "1917-07-28",
+    "end_date": "1917-07-28",
+    "synopsis": "",
+    "media_type": "movie",
+    "status": "finished_airing",
+    "num_episodes": 0,
+    "average_episode_duration": 0,
+    "genres": [
+      {
+        "id": 1,
+        "name": "Action"
+      }
+    ],
+    "studios": [],
+    "source": "original",
+    "related_anime": [],
+    "related_manga": [],
+    "recommendations": []
+  }

@@ -1,0 +1,29 @@
+{% if empty %}
+  <div class="text-center py-8 text-sm text-gray-400">
+    Nothing tracked in this range yet — try a different option.
+  </div>
+{% else %}
+  <div class="space-y-4">
+    <p class="text-xs text-gray-400">
+      {{ count }} {{ media_label }} · {{ images|length }} image{{ images|length|pluralize }}
+    </p>
+
+    {% for image in images %}
+      <div class="rounded-lg overflow-hidden border border-[#39404b] bg-[#1a1d20]">
+        <img src="{{ image.url }}" alt="Share image" class="w-full block">
+        <div class="flex items-center justify-between px-3 py-2 text-xs text-gray-400">
+          <span>{{ image.width }} × {{ image.height }} · {{ image.size_kb }} KB</span>
+          <a href="{{ image.url }}?dl=1"
+             class="inline-flex items-center gap-1 text-indigo-400 hover:text-indigo-300 transition-colors">
+            {% include "app/icons/download.svg" with classes="w-4 h-4" %}
+            Download
+          </a>
+        </div>
+      </div>
+    {% endfor %}
+
+    <p class="text-xs text-gray-500 leading-relaxed">
+      Right-click the preview to copy the image, or hit Download to save the PNG.
+    </p>
+  </div>
+{% endif %}

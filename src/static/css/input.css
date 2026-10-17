@@ -1,0 +1,205 @@
+@import "tailwindcss" source("../../");
+
+@theme {
+  --breakpoint-xs: 30rem;
+}
+
+[x-cloak] {
+  display: none !important;
+}
+
+.htmx-indicator {
+  display: none;
+}
+.htmx-request .htmx-indicator,
+.htmx-request.htmx-indicator {
+  display: block;
+}
+
+.lazyload,
+.lazyloading {
+  object-fit: none;
+}
+
+.clip-half {
+  clip-path: inset(0 50% 0 0);
+}
+
+/* Keep horizontal scrolling but hide the scrollbar so it doesn't
+   overlap content (e.g. the active-tab underline on section navs). */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+
+.media-grid {
+  @apply grid grid-cols-2 xs:grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-4;
+}
+
+/* https://tailwindcss.com/docs/upgrade-guide#hover-styles-on-mobile */
+@custom-variant hover-tap (&:hover);
+@custom-variant parent-hover-tap (.hover-tap:hover &);
+
+.toast-error {
+  @apply bg-red-700/95 border-red-600;
+}
+
+.toast-warning {
+  @apply bg-amber-700/95 border-amber-600;
+}
+
+.toast-success {
+  @apply bg-emerald-700/95 border-emerald-600;
+}
+
+.toast-info {
+  @apply bg-indigo-700/95 border-indigo-600;
+}
+
+.select2-container--tailwindcss-4 {
+  @apply min-w-full;
+}
+
+/* Dropdown */
+.select2-container--tailwindcss-4.select2-container--open .select2-dropdown {
+  @apply w-full mt-1 overflow-auto rounded-md text-base bg-[#39404b] border-gray-600 border focus-within:border-indigo-500 focus-within:ring focus-within:ring-indigo-200/50;
+}
+
+.select2-container--tailwindcss-4 .select2-results__message {
+  @apply text-sm text-gray-400;
+}
+
+/* Hover state */
+.select2-container--tailwindcss-4 .select2-results__option--highlighted {
+  @apply text-white bg-[#454d5a];
+}
+
+/* Multiple selection */
+.select2-container--tailwindcss-4 .select2-selection--multiple {
+  @apply rounded-md text-base sm:text-sm/6 bg-[#39404b] p-1.5 cursor-default text-white border border-white/10;
+}
+
+/* Multiple selection list */
+.select2-container--tailwindcss-4
+  .select2-selection--multiple
+  .select2-selection__rendered {
+  @apply flex flex-row flex-wrap gap-1.5 m-0 p-0 list-none;
+}
+
+/* Multiple selection choices */
+.select2-container--tailwindcss-4
+  .select2-selection--multiple
+  .select2-selection__choice {
+  @apply flex flex-row-reverse items-center gap-1 bg-[#454d5a] text-gray-200 pl-2 pr-1 py-1 rounded-md text-sm border border-indigo-500/20;
+}
+
+/* Remove button */
+.select2-container--tailwindcss-4
+  .select2-selection--multiple
+  .select2-selection__choice__remove {
+  @apply mr-1 h-4 w-4 pb-[0.10rem] items-center flex justify-center rounded-full hover:bg-red-400/10 hover:text-red-400 cursor-pointer;
+}
+
+/* Search field in multiple selection */
+.select2-container--tailwindcss-4
+  .select2-selection--multiple
+  .select2-search--inline {
+  @apply block my-0.5;
+}
+
+.select2-container--tailwindcss-4
+  .select2-selection--multiple
+  .select2-search--inline
+  .select2-search__field {
+  @apply h-6 p-0 m-0 text-sm/6 bg-transparent border-0 focus:outline-hidden focus:ring-0 placeholder:text-gray-500 placeholder:text-sm/6 placeholder:font-sans;
+}
+
+/* Focus styles for keyboard navigation */
+.select2-container--tailwindcss-4.select2-container--focus
+  .select2-selection--multiple {
+  @apply outline-none ring-2 ring-[#4a9eff] appearance-none;
+}
+
+#chartjs-tooltip {
+  opacity: 0;
+  position: absolute;
+  background: rgba(0, 0, 0, 0.85);
+  color: white;
+  border-radius: 8px;
+  padding: 12px 16px;
+  font-size: 14px;
+  pointer-events: none;
+  z-index: 100;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
+  transition: opacity 0.2s ease;
+  min-width: 180px;
+}
+
+#chartjs-tooltip table {
+  margin: 0;
+  border-spacing: 0;
+  border-collapse: collapse;
+  width: 100%;
+}
+
+#chartjs-tooltip table th {
+  text-align: center;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+  font-size: 16px;
+  font-weight: bold;
+}
+
+#chartjs-tooltip table td {
+  padding: 6px 4px;
+  white-space: nowrap;
+}
+
+#chartjs-tooltip table tr.total-row {
+  border-top: 1px solid rgba(255, 255, 255, 0.3);
+  font-weight: bold;
+  margin-top: 6px;
+}
+
+#chartjs-tooltip table tr.total-row td {
+  padding-top: 10px;
+}
+
+#chartjs-pie-tooltip {
+  opacity: 0;
+  position: absolute;
+  background: rgba(0, 0, 0, 0.85);
+  color: white;
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 12px;
+  pointer-events: none;
+  z-index: 100;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+  transition: opacity 0.2s ease;
+  min-width: 140px;
+  text-align: center;
+}
+
+#chartjs-pie-tooltip .pie-label {
+  font-size: 14px;
+  font-weight: bold;
+  margin-bottom: 4px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+#chartjs-pie-tooltip .pie-value {
+  font-size: 13px;
+  margin-top: 2px;
+}
+
+#chartjs-pie-tooltip .pie-percent {
+  font-weight: bold;
+  font-size: 15px;
+  margin-top: 3px;
+}

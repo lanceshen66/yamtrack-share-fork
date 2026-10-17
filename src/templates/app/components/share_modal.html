@@ -1,0 +1,134 @@
+<div class="bg-[#2a2f35] rounded-xl border border-[#39404b] shadow-2xl overflow-hidden"
+     x-data="{ scope: '{{ default_scope }}', orientation: 'portrait', theme: 'dark', showScore: true, showStatus: {{ default_show_status|yesno:'true,false' }} }">
+
+  {# 标题栏 #}
+  <div class="flex items-center justify-between px-5 py-4 border-b border-[#39404b]">
+    <div class="flex items-center gap-2">
+      {% include "app/icons/image.svg" with classes="w-5 h-5 text-indigo-400" %}
+      <h2 class="text-base font-semibold text-white">Share my {{ media_label }}</h2>
+    </div>
+    <button type="button"
+            class="p-1 rounded-md text-gray-400 hover:text-white hover:bg-[#39404b] transition-colors cursor-pointer"
+            title="Close"
+            @click="shareOpen = false">
+      {% include "app/icons/x.svg" with classes="w-5 h-5" %}
+    </button>
+  </div>
+
+  <div class="p-5 space-y-5">
+    {# 隐藏表单，把 Alpine 状态喂给 htmx #}
+    <form id="share-form" class="hidden">
+      <input type="hidden" name="scope" x-model="scope">
+      <input type="hidden" name="orientation" x-model="orientation">
+      <input type="hidden" name="theme" x-model="theme">
+      <input type="hidden" name="show_score" :value="showScore ? '1' : '0'">
+      <input type="hidden" name="show_status" :value="showStatus ? '1' : '0'">
+    </form>
+
+    {# 收录范围 #}
+    <div>
+      <p class="text-xs uppercase tracking-wide text-gray-500 mb-2">Include</p>
+      <div class="grid grid-cols-2 gap-2">
+        {% for value, label, count in share_scopes %}
+          <button type="button"
+                  @click="scope = '{{ value }}'"
+                  :class="scope === '{{ value }}' ? 'border-indigo-500 bg-indigo-600/20 text-white' : 'border-[#39404b] bg-[#23272b] text-gray-300 hover:border-gray-500'"
+                  class="px-3 py-2 rounded-md border text-sm transition-colors cursor-pointer flex items-center justify-between gap-2">
+            <span>{{ label }}</span>
+            <span class="text-xs text-gray-400 tabular-nums">{{ count }}</span>
+          </button>
+        {% endfor %}
+      </div>
+      <p class="mt-2 text-xs text-gray-500 leading-snug">
+        Everything groups the list into Finished / Watching / Planned / Paused / Dropped sections.
+      </p>
+    </div>
+
+    {# 画幅 #}
+    <div>
+      <p class="text-xs uppercase tracking-wide text-gray-500 mb-2">Layout</p>
+      <div class="grid grid-cols-2 gap-2">
+        <button type="button"
+                @click="orientation = 'portrait'"
+                :class="orientation === 'portrait' ? 'border-indigo-500 bg-indigo-600/20 text-white' : 'border-[#39404b] bg-[#23272b] text-gray-300 hover:border-gray-500'"
+                class="flex items-start gap-3 px-3 py-2.5 rounded-md border text-sm text-left transition-colors cursor-pointer">
+          <span class="mt-1 w-4 h-6 rounded-sm border-2 border-current opacity-70 shrink-0"></span>
+          <span class="min-w-0">
+            <span class="block">Portrait</span>
+            <span class="block text-xs text-gray-400 leading-snug">1080 × 1920 · 4 per row, grows with the list</span>
+          </span>
+        </button>
+        <button type="button"
+                @click="orientation = 'landscape'"
+                :class="orientation === 'landscape' ? 'border-indigo-500 bg-indigo-600/20 text-white' : 'border-[#39404b] bg-[#23272b] text-gray-300 hover:border-gray-500'"
+                class="flex items-start gap-3 px-3 py-2.5 rounded-md border text-sm text-left transition-colors cursor-pointer">
+          <span class="mt-2 w-6 h-4 rounded-sm border-2 border-current opacity-70 shrink-0"></span>
+          <span class="min-w-0">
+            <span class="block">Landscape</span>
+            <span class="block text-xs text-gray-400 leading-snug">1920 × 1080 · posters resize to fit one image</span>
+          </span>
+        </button>
+      </div>
+    </div>
+
+    {# 主题 #}
+    <div>
+      <p class="text-xs uppercase tracking-wide text-gray-500 mb-2">Style</p>
+      <div class="grid grid-cols-2 gap-2">
+        <button type="button"
+                @click="theme = 'dark'"
+                :class="theme === 'dark' ? 'border-indigo-500 bg-indigo-600/20 text-white' : 'border-[#39404b] bg-[#23272b] text-gray-300 hover:border-gray-500'"
+                class="flex items-center gap-2 px-3 py-2 rounded-md border text-sm transition-colors cursor-pointer">
+          <span class="w-4 h-4 rounded-full bg-[#212529] border border-gray-600"></span>
+          Dark
+        </button>
+        <button type="button"
+                @click="theme = 'light'"
+                :class="theme === 'light' ? 'border-indigo-500 bg-indigo-600/20 text-white' : 'border-[#39404b] bg-[#23272b] text-gray-300 hover:border-gray-500'"
+                class="flex items-center gap-2 px-3 py-2 rounded-md border text-sm transition-colors cursor-pointer">
+          <span class="w-4 h-4 rounded-full bg-gray-100 border border-gray-400"></span>
+          Light
+        </button>
+      </div>
+    </div>
+
+    {# 附加信息 #}
+    <div class="space-y-2.5">
+      <label class="flex items-start gap-3 cursor-pointer select-none">
+        <input type="checkbox"
+               class="mt-0.5 w-4 h-4 accent-indigo-600 cursor-pointer shrink-0"
+               x-model="showStatus">
+        <span class="text-sm text-gray-300 leading-snug">
+          Status badge on each poster
+          <span class="block text-xs text-gray-500 mt-0.5">Single-status lists only — "Everything" uses section headers</span>
+        </span>
+      </label>
+      <label class="flex items-start gap-3 cursor-pointer select-none">
+        <input type="checkbox"
+               class="mt-0.5 w-4 h-4 accent-indigo-600 cursor-pointer shrink-0"
+               x-model="showScore">
+        <span class="text-sm text-gray-300 leading-snug">Rating and episode count under each poster</span>
+      </label>
+    </div>
+
+    {# 生成 #}
+    <button type="button"
+            class="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-md font-medium transition-colors cursor-pointer"
+            hx-get="{% url 'share_render' target_user.username media_type %}"
+            hx-include="#share-form"
+            hx-target="#share-preview"
+            hx-swap="innerHTML"
+            hx-indicator="#share-loading">
+      {% include "app/icons/image.svg" with classes="w-4 h-4" %}
+      Generate image
+    </button>
+
+    <div id="share-loading"
+         class="htmx-indicator flex items-center justify-center gap-2 text-sm text-gray-400">
+      <div class="animate-spin rounded-full h-4 w-4 border-b-2 border-indigo-500"></div>
+      <span>Fetching posters and drawing…</span>
+    </div>
+
+    <div id="share-preview"></div>
+  </div>
+</div>

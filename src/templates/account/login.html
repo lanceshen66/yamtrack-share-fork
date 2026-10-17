@@ -1,0 +1,67 @@
+{% extends "account/base_entrance.html" %}
+{% load allauth account %}
+{% load socialaccount %}
+
+{% block head_title %}
+  Login
+{% endblock head_title %}
+
+{% block content_title %}
+  Sign in to your account
+{% endblock content_title %}
+
+{% block content %}
+  {% if not SOCIALACCOUNT_ONLY %}
+
+    {% url 'account_login' as login_url %}
+    {% element form form=form method="post" action=login_url tags="entrance,login" %}
+      {% slot body %}
+        {% csrf_token %}
+        {% element fields form=form unlabeled=True %}
+        {% endelement %}
+        {{ redirect_field }}
+      {% endslot %}
+
+      {% slot actions %}
+        {% element button type="submit" tags="prominent,login" icon='<path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"></path><polyline points="10 17 15 12 10 7"></polyline><line x1="15" x2="3" y1="12" y2="12"></line>' %}
+          Sign In
+        {% endelement %}
+      {% endslot %}
+    {% endelement %}
+  {% endif %}
+
+  {% if SOCIALACCOUNT_ENABLED %}
+    {% include "socialaccount/snippets/login.html" with page_layout="entrance" %}
+  {% endif %}
+
+  {% if not SOCIALACCOUNT_ONLY and REGISTRATION %}
+    <div class="mt-6 text-center">
+      <p class="text-gray-400">
+        Need an account?
+        <a class="text-indigo-400 hover:text-indigo-300"
+           href="{% url 'account_signup' %}">Register now</a>
+      </p>
+    </div>
+  {% endif %}
+{% endblock content %}
+
+{% block extra_body %}
+  {{ block.super }}
+
+  {% get_providers as socialaccount_providers %}
+  {% if socialaccount_providers and REDIRECT_LOGIN_TO_SSO and request.GET.loggedout != '1' %}
+    <script>
+      (function() {
+        const providerContainer = document.getElementById('providers');
+        if (providerContainer) {
+          const providerForms = providerContainer.querySelectorAll('form');
+      
+          // Only submit if there's exactly one provider form
+          if (providerForms.length === 1) {
+            providerForms[0].submit();
+          }
+        }
+      })();
+    </script>
+  {% endif %}
+{% endblock extra_body %}

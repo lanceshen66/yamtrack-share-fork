@@ -1,0 +1,157 @@
+{% extends "users/base.html" %}
+
+{% load widget_tweaks %}
+
+{% block title %}
+  Notifications - Yamtrack
+{% endblock title %}
+
+{% block settings_content %}
+  <div class="space-y-6">
+
+    <div class="bg-[#2a2f35] rounded-lg p-6">
+      <div class="flex items-center mb-4">
+        {% include "app/icons/bell.svg" with classes="w-6 h-6 text-indigo-400 mr-3" %}
+        <h2 class="text-xl font-semibold">Notifications</h2>
+      </div>
+
+      <p class="text-gray-400 mb-5 text-sm">Configure how you want to receive notifications about your media.</p>
+
+      <form class="space-y-6" method="post">
+        {% csrf_token %}
+
+        {# Notification URLS #}
+        <div x-data="{ showInfo: false }">
+          <div class="flex items-center justify-between mb-2">
+            <label for="apprise-urls" class="block text-sm font-medium text-gray-300">Apprise URLs</label>
+            <button type="button"
+                    class="text-gray-400 hover:text-gray-300 cursor-pointer"
+                    @click="showInfo = !showInfo">{% include "app/icons/info.svg" with classes="w-4 h-4" %}</button>
+          </div>
+
+          <div class="mb-4 p-3 bg-[#39404b] rounded-md text-sm text-gray-300"
+               x-show="showInfo">
+            <p class="mb-2">
+              <a href="https://github.com/caronc/apprise"
+                 target="_blank"
+                 rel="noopener noreferrer"
+                 class="text-indigo-400 hover:underline">Apprise</a> is a notification service that supports
+              <a href="https://github.com/caronc/apprise/wiki"
+                 target="_blank"
+                 rel="noopener noreferrer"
+                 class="text-indigo-400 hover:underline">many platforms</a> including:
+            </p>
+            <ul class="list-disc pl-5 space-y-1 text-gray-400">
+              <li>Discord</li>
+              <li>Telegram</li>
+              <li>Slack</li>
+              <li>Email</li>
+              <li>Pushover</li>
+              <li>ntfy</li>
+              <li>And many more...</li>
+            </ul>
+            <p class="mt-2">
+              Enter one URL per line. Example: <code class="bg-[#2a2f35] px-1 py-0.5 rounded">discord://webhook_id/webhook_token</code>
+            </p>
+          </div>
+
+          {{ form.notification_urls|add_class:"w-full p-3 bg-[#39404b] rounded-md text-white text-sm border border-gray-600 focus:border-indigo-500 focus:ring focus:ring-indigo-200 focus:ring-opacity-50 min-h-[150px]" }}
+          <p class="mt-1 text-xs text-gray-400">
+            Enter each Apprise URL on a separate line to send notifications to multiple services.
+          </p>
+        </div>
+
+        <div>
+          <h3 class="text-sm font-medium text-gray-300 mb-2">Notification Settings</h3>
+
+          {# Notification Settings #}
+          <div class="bg-[#39404b] p-4 rounded-md space-y-4">
+            <div class="flex items-center justify-between">
+              <div>
+                <label for="id_daily_digest_enabled"
+                       class="text-sm font-medium text-gray-200 flex items-center">
+                  {% include "app/icons/alarm-clock.svg" with classes="w-4 h-4 mr-2 text-indigo-400" %}
+                  Enable Daily Digest
+                </label>
+                <p class="text-xs text-gray-400 mt-1 ml-6">
+                  Receive a single notification each day with all media scheduled to release that day
+                </p>
+              </div>
+              <label class="relative inline-flex items-center cursor-pointer">
+                <input class="sr-only peer"
+                       type="checkbox"
+                       name="daily_digest_enabled"
+                       id="id_daily_digest_enabled"
+                       {% if form.daily_digest_enabled.value %}checked{% endif %}>
+                <div class="w-9 h-5 bg-gray-600 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-px after:left-0.5 after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4.5 after:w-4.5 after:transition-all peer-checked:bg-indigo-600">
+                </div>
+              </label>
+            </div>
+
+            <div class="flex items-center justify-between pt-3 border-t border-gray-600">
+              <div>
+                <label for="id_release_notifications_enabled"
+                       class="text-sm font-medium text-gray-200 flex items-center">
+                  {% include "app/icons/bell-ringing.svg" with classes="w-4 h-4 mr-2 text-indigo-400" %}
+                  Receive notifications for recently released media
+                </label>
+                <p class="text-xs text-gray-400 mt-1 ml-6">Get notified when new episodes, chapters, or other media are released</p>
+              </div>
+
+              <label class="relative inline-flex items-center cursor-pointer">
+                <input class="sr-only peer"
+                       type="checkbox"
+                       name="release_notifications_enabled"
+                       id="id_release_notifications_enabled"
+                       {% if form.release_notifications_enabled.value %}checked{% endif %}>
+                <div class="w-9 h-5 bg-gray-600 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-px after:left-0.5 after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4.5 after:w-4.5 after:transition-all peer-checked:bg-indigo-600">
+                </div>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div class="pt-4 border-t border-gray-700 flex justify-between">
+          <a href="{% url 'test_notification' %}"
+             class="flex items-center px-4 py-2 bg-[#39404b] text-white rounded-md hover:bg-[#454d5a] transition-colors text-sm cursor-pointer">
+            {% include "app/icons/bell.svg" with classes="w-4 h-4 mr-2" %}
+            Test Notifications
+          </a>
+          <button type="submit"
+                  class="flex items-center px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 transition-colors text-sm cursor-pointer">
+            {% include "app/icons/save.svg" with classes="w-4 h-4 mr-2" %}
+            Save Settings
+          </button>
+        </div>
+      </form>
+    </div>
+
+    {# Excluded Media Items #}
+    <div class="bg-[#2a2f35] rounded-lg p-6">
+      <div class="flex items-center mb-5">
+        {% include "app/icons/funnel.svg" with classes="lucide lucide-user w-6 h-6 text-indigo-400 mr-3" %}
+        <h2 class="text-xl font-semibold">Excluded Media Items</h2>
+      </div>
+
+      <p class="text-sm text-gray-300 mb-3">Exclude specific media items from notifications:</p>
+
+      <div class="relative mb-4">
+        <input placeholder="Search for media to exclude..."
+               class="w-full p-2 pl-8 bg-[#39404b] rounded-md text-white border border-gray-600 focus:border-indigo-500 focus:ring focus:ring-indigo-200 focus:ring-opacity-50 text-sm"
+               name="q"
+               type="text"
+               autocomplete="off"
+               hx-get="{% url 'search_notification_items' %}"
+               hx-trigger="keyup changed delay:300ms"
+               hx-target="#search-results">
+        {% include "app/icons/magnifying-glass.svg" with classes="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" %}
+      </div>
+
+      <div id="search-results"></div>
+
+      <div id="excluded-items-container">
+        {% include "users/components/excluded_items.html" with excluded_items=user.notification_excluded_items.all %}
+      </div>
+    </div>
+  </div>
+{% endblock settings_content %}

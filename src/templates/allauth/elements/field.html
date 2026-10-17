@@ -1,0 +1,89 @@
+{% load allauth %}
+
+<div>
+  {% if attrs.type != "checkbox" and attrs.type != "radio" %}
+    <label for="{{ attrs.id }}"
+           class="block text-sm font-medium mb-2 text-gray-300">
+      {% slot label %}
+      {% endslot %}
+    </label>
+  {% endif %}
+
+  {% if attrs.type == "textarea" %}
+    <textarea {% if attrs.required %}required=""{% endif %}
+              {% if attrs.rows %}rows="{{ attrs.rows }}"{% endif %}
+              {% if attrs.disabled %}disabled{% endif %}
+              {% if attrs.readonly %}readonly{% endif %}
+              {% if attrs.name %}name="{{ attrs.name }}"{% endif %}
+              {% if attrs.id %}id="{{ attrs.id }}"{% endif %}
+              {% if attrs.placeholder %}placeholder="{{ attrs.placeholder }}"{% endif %}
+              class="w-full p-3 bg-[#39404b] rounded-md text-white border {% if attrs.errors %}border-red-500{% else %}border-gray-600{% endif %} focus:border-indigo-500 focus:ring focus:ring-indigo-200 focus:ring-opacity-50">{% slot value %}{% endslot %}</textarea>
+  {% elif attrs.type == "password" %}
+    <div class="relative">
+      <input {% if attrs.required %}required=""{% endif %}
+             {% if attrs.disabled %}disabled{% endif %}
+             {% if attrs.readonly %}readonly{% endif %}
+             {% if attrs.name %}name="{{ attrs.name }}"{% endif %}
+             {% if attrs.id %}id="{{ attrs.id }}"{% endif %}
+             {% if attrs.placeholder %}placeholder="{{ attrs.placeholder }}"{% endif %}
+             {% if attrs.autocomplete %}autocomplete="{{ attrs.autocomplete }}"{% endif %}
+             {% if attrs.value is not None %}value="{{ attrs.value }}"{% endif %}
+             type="password"
+             x-bind:type="{% if attrs.name == 'password2' %}showConfirmPassword{% else %}showPassword{% endif %} ? 'text' : 'password'"
+             class="w-full p-3 pr-10 bg-[#39404b] rounded-md text-white border {% if attrs.errors %}border-red-500{% else %}border-gray-600{% endif %} focus:border-indigo-500 focus:ring focus:ring-indigo-200 focus:ring-opacity-50">
+      <button type="button"
+              tabindex="-1"
+              @click="{% if attrs.name == 'password2' %}showConfirmPassword = !showConfirmPassword{% else %}showPassword = !showPassword{% endif %}"
+              class="absolute inset-y-0 right-0 px-3 flex items-center text-gray-400 hover:text-white cursor-pointer">
+        <!-- Show when password is hidden -->
+        <div x-show="{% if attrs.name == 'password2' %}!showConfirmPassword{% else %}!showPassword{% endif %}">
+          {% include "app/icons/eye.svg" with classes="w-5 h-5" %}
+        </div>
+        <!-- Show when password is visible -->
+        <div x-cloak
+             x-show="{% if attrs.name == 'password2' %}showConfirmPassword{% else %}showPassword{% endif %}">
+          {% include "app/icons/eye-closed.svg" with classes="w-5 h-5" %}
+        </div>
+      </button>
+    </div>
+  {% elif attrs.type == "checkbox" or attrs.type == "radio" %}
+    <div class="flex items-center">
+      <input {% if attrs.required %}required=""{% endif %}
+             {% if attrs.disabled %}disabled{% endif %}
+             {% if attrs.readonly %}readonly{% endif %}
+             {% if attrs.checked %}checked{% endif %}
+             {% if attrs.name %}name="{{ attrs.name }}"{% endif %}
+             {% if attrs.id %}id="{{ attrs.id }}"{% endif %}
+             {% if attrs.value is not None %}value="{{ attrs.value }}"{% endif %}
+             type="{{ attrs.type }}"
+             class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-600 bg-[#39404b] rounded">
+      <label for="{{ attrs.id }}" class="ml-2 block text-sm text-gray-300">
+        {% slot label %}
+        {% endslot %}
+      </label>
+    </div>
+  {% else %}
+    <input {% if attrs.required %}required=""{% endif %}
+           {% if attrs.disabled %}disabled{% endif %}
+           {% if attrs.readonly %}readonly{% endif %}
+           {% if attrs.checked %}checked{% endif %}
+           {% if attrs.name %}name="{{ attrs.name }}"{% endif %}
+           {% if attrs.id %}id="{{ attrs.id }}"{% endif %}
+           {% if attrs.placeholder %}placeholder="{{ attrs.placeholder }}"{% endif %}
+           {% if attrs.autocomplete %}autocomplete="{{ attrs.autocomplete }}"{% endif %}
+           {% if attrs.value is not None %}value="{{ attrs.value }}"{% endif %}
+           type="{{ attrs.type }}"
+           class="w-full p-3 bg-[#39404b] rounded-md text-white border {% if attrs.errors %}border-red-500{% else %}border-gray-600{% endif %} focus:border-indigo-500 focus:ring focus:ring-indigo-200 focus:ring-opacity-50">
+  {% endif %}
+
+  {% if attrs.errors %}
+    {% for error in attrs.errors %}<p class="mt-1 text-sm text-red-400">{{ error }}</p>{% endfor %}
+  {% endif %}
+
+  {% if slots.help_text and not attrs.type == "password" %}
+    <p class="mt-1 text-sm text-gray-400">
+      {% slot help_text %}
+      {% endslot %}
+    </p>
+  {% endif %}
+</div>

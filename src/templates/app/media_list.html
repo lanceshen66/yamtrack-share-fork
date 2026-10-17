@@ -1,0 +1,277 @@
+{% extends "base.html" %}
+{% load static %}
+{% load app_tags %}
+
+{% block title %}
+  {% if request.user != target_user %}{{ target_user.username }}'s{% endif %}
+  {{ media_type|media_type_readable_plural }} - Yamtrack
+{% endblock title %}
+
+{% block content %}
+  <h1 class="text-3xl font-bold mb-6">
+    {% if request.user != target_user %}{{ target_user.username }}'s{% endif %}
+    {{ media_type|media_type_readable_plural }}
+  </h1>
+
+  <div x-data="{ sort: '{{ current_sort }}', status: '{{ current_status }}', layout: '{{ current_layout }}', search: '{{ request.GET.search|default:'' }}', statusLabels: {
+    {% for value, label in status_choices %}
+      '{{ value }}': '{{ label }}'
+      {% if not forloop.last %},{% endif %}
+
+    {% endfor %}
+    }, sortLabels: {
+    {% for value, label in sort_choices %}
+      '{{ value }}': '{{ label }}'
+      {% if not forloop.last %},{% endif %}
+
+    {% endfor %}
+    } }">
+
+    <!-- Form to manage state -->
+    <form id="filter-form" class="hidden">
+      <input type="hidden" name="sort" x-model="sort">
+      <input type="hidden" name="status" x-model="status">
+      <input type="hidden" name="search" x-model="search">
+      <input type="hidden" name="layout" x-model="layout">
+    </form>
+
+    <div class="flex flex-col md:flex-row gap-4 mb-6">
+      <!-- Search -->
+      <div class="relative grow">
+        <input placeholder="Search {{ media_type_plural }} in {% if target_user != request.user %}{{ target_user.username }}'s {% else %}your {% endif %}list..."
+               class="w-full py-2 pl-10 pr-4 bg-[#39404b] rounded-md text-white focus:outline-none focus:ring-2 focus:ring-[#4a9eff] appearance-none"
+               type="text"
+               x-model="search"
+               hx-get="{% url 'medialist' target_user.username media_type %}"
+               hx-trigger="keyup changed delay:300ms, search"
+               {% if media_list %} hx-target="{{ layout_class }}" {% else %} hx-target="#empty_list" {% endif %}
+               hx-include="#filter-form"
+               hx-indicator="#search-indicator">
+        {% include "app/icons/magnifying-glass.svg" with classes="w-6 h-6 absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" %}
+        <div id="search-indicator"
+             class="htmx-indicator absolute right-3 top-1/2 transform -translate-y-1/2">
+          <div class="animate-spin rounded-full h-4 w-4 border-b-2 border-indigo-500"></div>
+        </div>
+      </div>
+
+      <div class="flex gap-2 flex-wrap">
+        <!-- Filter by Status -->
+        <div class="relative" x-data="{ open: false }">
+          <button class="flex items-center px-4 py-2 bg-[#39404b] rounded-md hover:bg-[#454d5a] transition-colors cursor-pointer"
+                  @click="open = !open"
+                  type="button">
+            {% include "app/icons/funnel.svg" with classes="w-4 h-4 mr-2" %}
+            <span x-text="statusLabels[status] || status"></span>
+            {% include "app/icons/chevron-down.svg" with classes="w-4 h-4 ml-2" %}
+          </button>
+
+          <div class="absolute z-10 mt-2 py-1 w-48 bg-[#39404b] rounded-md shadow-lg overflow-hidden border border-gray-700"
+               x-cloak
+               x-show="open"
+               @click.outside="open = false"
+               x-transition:enter="transition ease-out duration-100"
+               x-transition:enter-start="transform opacity-0 scale-95"
+               x-transition:enter-end="transform opacity-100 scale-100"
+               x-transition:leave="transition ease-in duration-75"
+               x-transition:leave-start="transform opacity-100 scale-100"
+               x-transition:leave-end="transform opacity-0 scale-95">
+            {% for value, label in status_choices %}
+              <button hx-get="{% url 'medialist' target_user.username media_type %}"
+                      {% if media_list %} hx-target="{{ layout_class }}" {% else %} hx-target="#empty_list" {% endif %}
+                      hx-include="#filter-form"
+                      hx-indicator="#loading-indicator"
+                      class="block w-full px-4 py-2 text-left text-sm transition-colors cursor-pointer"
+                      :class="status === '{{ value }}' ? 'bg-indigo-600 text-white font-medium' : 'text-gray-300 hover:bg-[#454d5a] hover:text-white'"
+                      @click="status = '{{ value }}'; open = false"
+                      type="button">{{ label }}</button>
+            {% endfor %}
+          </div>
+        </div>
+
+        <!-- Sort by -->
+        <div class="relative" x-data="{ open: false }">
+          <button class="flex items-center px-4 py-2 bg-[#39404b] rounded-md hover:bg-[#454d5a] transition-colors cursor-pointer"
+                  @click="open = !open"
+                  type="button">
+            {% include "app/icons/arrows-up-down.svg" with classes="w-4 h-4 mr-2" %}
+            <span x-text="sortLabels[sort] || sort"></span>
+            {% include "app/icons/chevron-down.svg" with classes="w-4 h-4 ml-2" %}
+          </button>
+
+          <div class="absolute z-10 mt-2 py-1 w-48 bg-[#39404b] rounded-md shadow-lg overflow-hidden border border-gray-700"
+               x-cloak
+               x-show="open"
+               @click.outside="open = false"
+               x-transition:enter="transition ease-out duration-100"
+               x-transition:enter-start="transform opacity-0 scale-95"
+               x-transition:enter-end="transform opacity-100 scale-100"
+               x-transition:leave="transition ease-in duration-75"
+               x-transition:leave-start="transform opacity-100 scale-100"
+               x-transition:leave-end="transform opacity-0 scale-95">
+            {% for value, label in sort_choices %}
+              <button hx-get="{% url 'medialist' target_user.username media_type %}"
+                      {% if media_list %} hx-target="{{ layout_class }}" {% else %} hx-target="#empty_list" {% endif %}
+                      hx-include="#filter-form"
+                      hx-indicator="#loading-indicator"
+                      class="block w-full px-4 py-2 text-left text-sm transition-colors cursor-pointer"
+                      :class="sort === '{{ value }}' ? 'bg-indigo-600 text-white font-medium' : 'text-gray-300 hover:bg-[#454d5a] hover:text-white'"
+                      @click="sort = '{{ value }}'; open = false"
+                      type="button">{{ label }}</button>
+            {% endfor %}
+          </div>
+        </div>
+
+        <!-- Layout Toggle -->
+        <div class="flex rounded-md overflow-hidden border border-gray-700">
+          <a :href="`{% url 'medialist' target_user.username media_type %}?${search ? 'search=' + search + '&' : ''}${status !== 'all' ? 'status=' + status + '&' : ''}${sort !== 'score' ? 'sort=' + sort + '&' : ''}layout=grid`"
+             class="p-2 cursor-pointer"
+             :class="layout === 'grid' ? 'bg-indigo-600 text-white' : 'bg-[#39404b] hover:bg-[#454d5a]'"
+             title="Grid View"
+             @click="layout = 'grid'">{% include "app/icons/four-square.svg" with classes="w-5 h-5" %}</a>
+          <a :href="`{% url 'medialist' target_user.username media_type %}?${search ? 'search=' + search + '&' : ''}${status !== 'all' ? 'status=' + status + '&' : ''}${sort !== 'score' ? 'sort=' + sort + '&' : ''}layout=table`"
+             class="p-2 cursor-pointer"
+             :class="layout === 'table' ? 'bg-indigo-600 text-white' : 'bg-[#39404b] hover:bg-[#454d5a]'"
+             title="Table View"
+             @click="layout = 'table'">{% include "app/icons/table.svg" with classes="w-5 h-5" %}</a>
+        </div>
+
+        <!-- 分享为图片（仅本人可见） -->
+        {% if request.user == target_user %}
+          <div class="inline-flex" x-data="{ shareOpen: false }">
+            <button class="flex items-center px-4 py-2 bg-[#39404b] rounded-md hover:bg-[#454d5a] transition-colors cursor-pointer"
+                    title="Export this list as an image"
+                    hx-get="{% url 'share_modal' target_user.username media_type %}"
+                    hx-target="#share-modal-content"
+                    hx-trigger="click once"
+                    @click="shareOpen = true"
+                    type="button">
+              {% include "app/icons/export.svg" with classes="w-4 h-4 mr-2" %}
+              <span>Share</span>
+            </button>
+
+            <div x-show="shareOpen"
+                 x-cloak
+                 class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4"
+                 @keydown.escape.window="shareOpen = false">
+              <div class="w-full max-w-lg max-h-[90vh] overflow-y-auto relative z-60"
+                   @click.outside="shareOpen = false">
+                <div id="share-modal-content"></div>
+              </div>
+            </div>
+          </div>
+        {% endif %}
+      </div>
+    </div>
+
+    {% if not media_list %}
+      <div id="empty_list"
+           class="flex flex-col items-center justify-center py-16 bg-[#2a2f35] rounded-lg">
+        <div class="text-center max-w-md mx-auto p-6">
+          <div class="bg-[#39404b] rounded-full p-4 w-16 h-16 mx-auto mb-4 flex items-center justify-center">
+            {% include "app/icons/edit.svg" with classes="w-8 h-8 text-gray-400" %}
+          </div>
+          <h3 class="text-xl font-semibold mb-2">No {{ media_type|media_type_readable_plural }} Tracked Yet</h3>
+          {% if request.user == target_user %}
+            <p class="text-gray-400 mb-6">
+              Start tracking your {{ media_type_plural }} to keep a record of what you've {{ media_type|media_past_verb }}.
+            </p>
+            <a href="{{ media_type|sample_search }}"
+               class="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 transition-colors">
+              Browse {{ media_type|media_type_readable_plural }}
+            </a>
+          {% endif %}
+        </div>
+      </div>
+    {% elif current_layout == "grid" %}
+      <div class="media-grid">{% include "app/components/media_grid_items.html" %}</div>
+    {% else %}
+      <div class="bg-[#2a2f35] p-4 rounded-lg overflow-hidden max-w-[calc(100svw-4rem)] overflow-x-scroll">
+        <table class="w-full bg-[#2a2f35]">
+          <thead class="text-left text-gray-400 text-sm">
+            <tr>
+              <th class="p-2 w-15"></th>
+              <th class="p-2 pe-8 w-2/5">Title</th>
+              <th class="p-2 text-center">Score</th>
+              {% if media_type != MediaTypes.MOVIE.value %}<th class="p-2 text-center">Progress</th>{% endif %}
+              {% if media_type == MediaTypes.TV.value %}<th class="p-2 text-center">Last Watched</th>{% endif %}
+              <th class="p-2 text-center">Status</th>
+              <th class="p-2 text-center">Start Date</th>
+              <th class="p-2 text-center">End Date</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% include "app/components/media_table_items.html" %}
+          </tbody>
+        </table>
+      </div>
+    {% endif %}
+
+    <div id="loading-indicator" class="htmx-indicator text-center pt-8">
+      <div class="inline-flex justify-center items-center">
+        <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-500"></div>
+      </div>
+    </div>
+  </div>
+{% endblock content %}
+
+{% block sidebar_own_media %}
+  {% if request.user.is_authenticated %}{{ block.super }}{% endif %}
+{% endblock sidebar_own_media %}
+
+{% block sidebar_external_media_view %}
+  {% if target_user != request.user %}
+    <ul class="space-y-1 mb-6 {% if request.user.is_authenticated %}border-t border-[#2c3136] pt-4{% endif %}">
+      <li>
+        <span class="flex font-bold items-center space-x-3 px-4 py-2 rounded-md transition-colors duration-200 text-sm text-white">{{ target_user.username }}'s Media:</span>
+      </li>
+      {% get_sidebar_media_types target_user as sidebar_media_types %}
+      {% for item in sidebar_media_types %}
+        <li>
+          <a href="{% url 'medialist' username=target_user.username media_type=item.media_type %}"
+             class="flex items-center space-x-3 px-4 py-2 rounded-md transition-colors duration-200 text-sm {% if media_type == item.media_type %}text-white bg-[#2c3136]{% else %}text-gray-400 hover:text-white hover:bg-[#23272b]{% endif %}">
+            {% icon item.media_type is_active=media_type|str_equals:item.media_type %}
+            <span>{{ item.display_name }}</span>
+          </a>
+        </li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+{% endblock sidebar_external_media_view %}
+
+{% block sidebar_utilities %}
+  {% if request.user.is_authenticated %}{{ block.super }}{% endif %}
+{% endblock sidebar_utilities %}
+
+{% block sidebar_logout %}
+  {% if request.user.is_authenticated %}{{ block.super }}{% endif %}
+{% endblock sidebar_logout %}
+
+{% block anonymous_login %}
+  {% if not request.user.is_authenticated %}
+    <div class="p-4 border-t border-[#2c3136] mt-auto">
+      <div class="space-y-2">
+        <a href="{% url 'account_login' %}?next={{ request.path }}"
+           class="mt-4 p-3 rounded-lg w-full flex items-center justify-center gap-2 text-white duration-300 cursor-pointer bg-indigo-600 hover:bg-indigo-700 ">
+          <svg xmlns="http://www.w3.org/2000/svg"
+               width="18"
+               height="18"
+               viewBox="0 0 24 24"
+               fill="none"
+               stroke="currentColor"
+               stroke-width="2"
+               stroke-linecap="round"
+               stroke-linejoin="round">
+            <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"></path>
+            <polyline points="10 17 15 12 10 7"></polyline>
+            <line x1="15" x2="3" y1="12" y2="12"></line>
+          </svg>
+          Sign In
+        </a>
+      </div>
+    </div>
+  {% endif %}
+{% endblock anonymous_login %}
+
+{% block search_bar %}
+  {% if request.user.is_authenticated %}{{ block.super }}{% endif %}
+{% endblock search_bar %}
